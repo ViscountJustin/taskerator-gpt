@@ -9,6 +9,7 @@ import re
 import openai
 import pinecone
 from dotenv import load_dotenv
+from slack import SlackWrapper
 
 # Load default environment variables (.env)
 load_dotenv()
@@ -33,6 +34,10 @@ assert (
 YOUR_TABLE_NAME = os.getenv("TABLE_NAME", "")
 assert YOUR_TABLE_NAME, "TABLE_NAME environment variable is missing from .env"
 
+SLACK_APP_TOKEN = os.getenv("SLACK_APP_TOKEN", "")
+
+SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")
+
 # Run configuration
 BABY_NAME = os.getenv("BABY_NAME", "BabyAGI")
 COOPERATIVE_MODE = "none"
@@ -49,6 +54,14 @@ INITIAL_TASK = os.getenv("INITIAL_TASK", os.getenv("FIRST_TASK", ""))
 # Model configuration
 OPENAI_TEMPERATURE = float(os.getenv("OPENAI_TEMPERATURE", 0.0))
 
+slackwrapper = SlackWrapper(SLACK_BOT_TOKEN, SLACK_APP_TOKEN)
+
+def log(message: str):
+    cleanMessage = re.sub('\[[0-9a-zA-Z]*\[[0-9a-zA-Z]*', '', message)
+    print(message)
+    with open('somefile.txt', 'a') as the_file:
+        the_file.write(cleanMessage+'\n')
+    slackwrapper.send_slack_message('taskerator-gpt', cleanMessage)
 
 # Extensions support begin
 
@@ -87,27 +100,27 @@ if DOTENV_EXTENSIONS:
 
 # Extensions support end
 
-print("\033[95m\033[1m"+"\n*****CONFIGURATION*****\n"+"\033[0m\033[0m")
-print(f"Name: {BABY_NAME}")
-print(f"LLM : {OPENAI_API_MODEL}")
-print(f"Mode: {'none' if COOPERATIVE_MODE in ['n', 'none'] else 'local' if COOPERATIVE_MODE in ['l', 'local'] else 'distributed' if COOPERATIVE_MODE in ['d', 'distributed'] else 'undefined'}")
+log("\033[95m\033[1m"+"\n*****CONFIGURATION*****\n"+"\033[0m\033[0m")
+log(f"Name: {BABY_NAME}")
+log(f"LLM : {OPENAI_API_MODEL}")
+log(f"Mode: {'none' if COOPERATIVE_MODE in ['n', 'none'] else 'local' if COOPERATIVE_MODE in ['l', 'local'] else 'distributed' if COOPERATIVE_MODE in ['d', 'distributed'] else 'undefined'}")
 
 # Check if we know what we are doing
 assert OBJECTIVE, "OBJECTIVE environment variable is missing from .env"
 assert INITIAL_TASK, "INITIAL_TASK environment variable is missing from .env"
 
 if "gpt-4" in OPENAI_API_MODEL.lower():
-    print(
+    log(
         "\033[91m\033[1m"
         + "\n*****USING GPT-4. POTENTIALLY EXPENSIVE. MONITOR YOUR COSTS*****"
         + "\033[0m\033[0m"
     )
 
-print("\033[94m\033[1m" + "\n*****OBJECTIVE*****\n" + "\033[0m\033[0m")
-print(f"{OBJECTIVE}")
+log("\033[94m\033[1m" + "\n*****OBJECTIVE*****\n" + "\033[0m\033[0m")
+log(f"{OBJECTIVE}")
 
-if not JOIN_EXISTING_OBJECTIVE: print("\033[93m\033[1m" + "\nInitial task:" + "\033[0m\033[0m" + f" {INITIAL_TASK}")
-else: print("\033[93m\033[1m" + f"\nJoining to help the objective" + "\033[0m\033[0m")
+if not JOIN_EXISTING_OBJECTIVE: log("\033[93m\033[1m" + "\nInitial task:" + "\033[0m\033[0m" + f" {INITIAL_TASK}")
+else: log("\033[93m\033[1m" + f"\nJoining to help the objective" + "\033[0m\033[0m")
 
 # Configure OpenAI and Pinecone
 openai.api_key = OPENAI_API_KEY
@@ -210,32 +223,32 @@ def openai_call(
                 )
                 return response.choices[0].message.content.strip()
         except openai.error.RateLimitError:
-            print(
+            log(
                 "   *** The OpenAI API rate limit has been exceeded. Waiting 10 seconds and trying again. ***"
             )
             time.sleep(10)  # Wait 10 seconds and try again
         except openai.error.Timeout:
-            print(
+            log(
                 "   *** OpenAI API timeout occured. Waiting 10 seconds and trying again. ***"
             )
             time.sleep(10)  # Wait 10 seconds and try again
         except openai.error.APIError:
-            print(
+            log(
                 "   *** OpenAI API error occured. Waiting 10 seconds and trying again. ***"
             )
             time.sleep(10)  # Wait 10 seconds and try again
         except openai.error.APIConnectionError:
-            print(
+            log(
                 "   *** OpenAI API connection error occured. Check your network settings, proxy configuration, SSL certificates, or firewall rules. Waiting 10 seconds and trying again. ***"
             )
             time.sleep(10)  # Wait 10 seconds and try again
         except openai.error.InvalidRequestError:
-            print(
+            log(
                 "   *** OpenAI API invalid request. Check the documentation for the specific API method you are calling and make sure you are sending valid and complete parameters. Waiting 10 seconds and trying again. ***"
             )
             time.sleep(10)  # Wait 10 seconds and try again
         except openai.error.ServiceUnavailableError:
-            print(
+            log(
                 "   *** OpenAI API service unavailable. Waiting 10 seconds and trying again. ***"
             )
             time.sleep(10)  # Wait 10 seconds and try again
@@ -294,8 +307,8 @@ def execution_agent(objective: str, task: str) -> str:
     """
     
     context = context_agent(query=objective, top_results_num=5)
-    # print("\n*******RELEVANT CONTEXT******\n")
-    # print(context)
+    # log("\n*******RELEVANT CONTEXT******\n")
+    # log(context)
     prompt = f"""
     You are an AI who performs one task based on the following objective: {objective}\n.
     Take into account these previously completed tasks: {context}\n.
@@ -318,8 +331,8 @@ def context_agent(query: str, top_results_num: int):
     """
     query_embedding = get_ada_embedding(query)
     results = index.query(query_embedding, top_k=top_results_num, include_metadata=True, namespace=OBJECTIVE_PINECONE_COMPAT)
-    # print("***** RESULTS *****")
-    # print(results)
+    # log("***** RESULTS *****")
+    # log(results)
     sorted_results = sorted(results.matches, key=lambda x: x.score, reverse=True)
     return [(str(item.metadata["task"])) for item in sorted_results]
 
@@ -336,19 +349,19 @@ while True:
     # As long as there are tasks in the storage...
     if not tasks_storage.is_empty():
         # Print the task list
-        print("\033[95m\033[1m" + "\n*****TASK LIST*****\n" + "\033[0m\033[0m")
+        log("\033[95m\033[1m" + "\n*****TASK LIST*****\n" + "\033[0m\033[0m")
         for t in tasks_storage.get_task_names():
-            print(" • "+t)
+            log(" • "+t)
 
         # Step 1: Pull the first incomplete task
         task = tasks_storage.popleft()
-        print("\033[92m\033[1m" + "\n*****NEXT TASK*****\n" + "\033[0m\033[0m")
-        print(task['task_name'])
+        log("\033[92m\033[1m" + "\n*****NEXT TASK*****\n" + "\033[0m\033[0m")
+        log(task['task_name'])
 
         # Send to execution function to complete the task based on the context
         result = execution_agent(OBJECTIVE, task["task_name"])
-        print("\033[93m\033[1m" + "\n*****TASK RESULT*****\n" + "\033[0m\033[0m")
-        print(result)
+        log("\033[93m\033[1m" + "\n*****TASK RESULT*****\n" + "\033[0m\033[0m")
+        log(result)
 
         # Step 2: Enrich result and store in Pinecone
         enriched_result = {
