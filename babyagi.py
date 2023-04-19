@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 import os
-import subprocess
+import re
 import time
-from collections import deque
 from typing import Dict, List
 import importlib
-import re
-import openai
+
 import pinecone
 from dotenv import load_dotenv
-from slack import SlackWrapper
+from Logger import log
+from SingleTaskListStorage import SingleTaskListStorage
+from OpenAIWrapper import OpenAIWrapper
 
 # Load default environment variables (.env)
 load_dotenv()
@@ -34,10 +34,6 @@ assert (
 YOUR_TABLE_NAME = os.getenv("TABLE_NAME", "")
 assert YOUR_TABLE_NAME, "TABLE_NAME environment variable is missing from .env"
 
-SLACK_APP_TOKEN = os.getenv("SLACK_APP_TOKEN", "")
-
-SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")
-
 # Run configuration
 BABY_NAME = os.getenv("BABY_NAME", "BabyAGI")
 COOPERATIVE_MODE = "none"
@@ -54,14 +50,8 @@ INITIAL_TASK = os.getenv("INITIAL_TASK", os.getenv("FIRST_TASK", ""))
 # Model configuration
 OPENAI_TEMPERATURE = float(os.getenv("OPENAI_TEMPERATURE", 0.0))
 
-slackwrapper = SlackWrapper(SLACK_BOT_TOKEN, SLACK_APP_TOKEN)
+openaiwrapper = OpenAIWrapper(OPENAI_TEMPERATURE, OPENAI_API_MODEL, OPENAI_API_KEY, OBJECTIVE)
 
-def log(message: str):
-    cleanMessage = re.sub('\[[0-9a-zA-Z]*\[[0-9a-zA-Z]*', '', message)
-    print(message)
-    with open('somefile.txt', 'a') as the_file:
-        the_file.write(cleanMessage+'\n')
-    slackwrapper.send_slack_message('taskerator-gpt', cleanMessage)
 
 # Extensions support begin
 
@@ -123,7 +113,6 @@ if not JOIN_EXISTING_OBJECTIVE: log("\033[93m\033[1m" + "\nInitial task:" + "\03
 else: log("\033[93m\033[1m" + f"\nJoining to help the objective" + "\033[0m\033[0m")
 
 # Configure OpenAI and Pinecone
-openai.api_key = OPENAI_API_KEY
 pinecone.init(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
 
 # Create Pinecone index
@@ -139,32 +128,6 @@ if table_name not in pinecone.list_indexes():
 # Connect to the index
 index = pinecone.Index(table_name)
 
-# Task storage supporting only a single instance of BabyAGI
-class SingleTaskListStorage:
-    def __init__(self):
-        self.tasks = deque([])
-        self.task_id_counter = 0
-
-    def append(self, task: Dict):
-        self.tasks.append(task)
-
-    def replace(self, tasks: List[Dict]):
-        self.tasks = deque(tasks)
-
-    def popleft(self):
-        return self.tasks.popleft()
-
-    def is_empty(self):
-        return False if self.tasks else True
-
-    def next_task_id(self):
-        self.task_id_counter += 1
-        return self.task_id_counter
-
-    def get_task_names(self):
-        return [t["task_name"] for t in self.tasks]
-
-
 # Initialize tasks storage
 tasks_storage = SingleTaskListStorage()
 if COOPERATIVE_MODE in ['l', 'local']:
@@ -175,145 +138,6 @@ if COOPERATIVE_MODE in ['l', 'local']:
     tasks_storage = CooperativeTaskListStorage(OBJECTIVE)
 elif COOPERATIVE_MODE in ['d', 'distributed']:
     pass
-
-
-# Get embedding for the text
-def get_ada_embedding(text):
-    text = text.replace("\n", " ")
-    return openai.Embedding.create(input=[text], model="text-embedding-ada-002")[
-        "data"
-    ][0]["embedding"]
-
-
-def openai_call(
-    prompt: str,
-    model: str = OPENAI_API_MODEL,
-    temperature: float = OPENAI_TEMPERATURE,
-    max_tokens: int = 100,
-):
-    while True:
-        try:
-            if model.startswith("llama"):
-                # Spawn a subprocess to run llama.cpp
-                cmd = ["llama/main", "-p", prompt]
-                result = subprocess.run(cmd, shell=True, stderr=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True)
-                return result.stdout.strip()
-            elif not model.startswith("gpt-"):
-                # Use completion API
-                response = openai.Completion.create(
-                    engine=model,
-                    prompt=prompt,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    top_p=1,
-                    frequency_penalty=0,
-                    presence_penalty=0,
-                )
-                return response.choices[0].text.strip()
-            else:
-                # Use chat completion API
-                messages = [{"role": "system", "content": prompt}]
-                response = openai.ChatCompletion.create(
-                    model=model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    n=1,
-                    stop=None,
-                )
-                return response.choices[0].message.content.strip()
-        except openai.error.RateLimitError:
-            log(
-                "   *** The OpenAI API rate limit has been exceeded. Waiting 10 seconds and trying again. ***"
-            )
-            time.sleep(10)  # Wait 10 seconds and try again
-        except openai.error.Timeout:
-            log(
-                "   *** OpenAI API timeout occured. Waiting 10 seconds and trying again. ***"
-            )
-            time.sleep(10)  # Wait 10 seconds and try again
-        except openai.error.APIError:
-            log(
-                "   *** OpenAI API error occured. Waiting 10 seconds and trying again. ***"
-            )
-            time.sleep(10)  # Wait 10 seconds and try again
-        except openai.error.APIConnectionError:
-            log(
-                "   *** OpenAI API connection error occured. Check your network settings, proxy configuration, SSL certificates, or firewall rules. Waiting 10 seconds and trying again. ***"
-            )
-            time.sleep(10)  # Wait 10 seconds and try again
-        except openai.error.InvalidRequestError:
-            log(
-                "   *** OpenAI API invalid request. Check the documentation for the specific API method you are calling and make sure you are sending valid and complete parameters. Waiting 10 seconds and trying again. ***"
-            )
-            time.sleep(10)  # Wait 10 seconds and try again
-        except openai.error.ServiceUnavailableError:
-            log(
-                "   *** OpenAI API service unavailable. Waiting 10 seconds and trying again. ***"
-            )
-            time.sleep(10)  # Wait 10 seconds and try again
-        else:
-            break
-
-
-def task_creation_agent(
-    objective: str, result: Dict, task_description: str, task_list: List[str]
-):
-    prompt = f"""
-    You are a task creation AI that uses the result of an execution agent to create new tasks with the following objective: {objective},
-    The last completed task has the result: {result}.
-    This result was based on this task description: {task_description}. These are incomplete tasks: {', '.join(task_list)}.
-    Based on the result, create new tasks to be completed by the AI system that do not overlap with incomplete tasks.
-    Return the tasks as an array."""
-    response = openai_call(prompt)
-    new_tasks = response.split("\n") if "\n" in response else [response]
-    return [{"task_name": task_name} for task_name in new_tasks]
-
-
-def prioritization_agent():
-    task_names = tasks_storage.get_task_names()
-    next_task_id = tasks_storage.next_task_id()
-    prompt = f"""
-    You are a task prioritization AI tasked with cleaning the formatting of and reprioritizing the following tasks: {task_names}.
-    Consider the ultimate objective of your team:{OBJECTIVE}.
-    Do not remove any tasks. Return the result as a numbered list, like:
-    #. First task
-    #. Second task
-    Start the task list with number {next_task_id}."""
-    response = openai_call(prompt)
-    new_tasks = response.split("\n") if "\n" in response else [response]
-    new_tasks_list = []
-    for task_string in new_tasks:
-        task_parts = task_string.strip().split(".", 1)
-        if len(task_parts) == 2:
-            task_id = task_parts[0].strip()
-            task_name = task_parts[1].strip()
-            new_tasks_list.append({"task_id": task_id, "task_name": task_name})
-    tasks_storage.replace(new_tasks_list)
-
-
-# Execute a task based on the objective and five previous tasks 
-def execution_agent(objective: str, task: str) -> str:
-    """
-    Executes a task based on the given objective and previous context.
-
-    Args:
-        objective (str): The objective or goal for the AI to perform the task.
-        task (str): The task to be executed by the AI.
-
-    Returns:
-        str: The response generated by the AI for the given task.
-
-    """
-    
-    context = context_agent(query=objective, top_results_num=5)
-    # log("\n*******RELEVANT CONTEXT******\n")
-    # log(context)
-    prompt = f"""
-    You are an AI who performs one task based on the following objective: {objective}\n.
-    Take into account these previously completed tasks: {context}\n.
-    Your task: {task}\nResponse:"""
-    return openai_call(prompt, max_tokens=2000)
 
 
 # Get the top n completed tasks for the objective
@@ -329,7 +153,7 @@ def context_agent(query: str, top_results_num: int):
         list: A list of tasks as context for the given query, sorted by relevance.
 
     """
-    query_embedding = get_ada_embedding(query)
+    query_embedding = openaiwrapper.get_ada_embedding(query)
     results = index.query(query_embedding, top_k=top_results_num, include_metadata=True, namespace=OBJECTIVE_PINECONE_COMPAT)
     # log("***** RESULTS *****")
     # log(results)
@@ -359,7 +183,8 @@ while True:
         log(task['task_name'])
 
         # Send to execution function to complete the task based on the context
-        result = execution_agent(OBJECTIVE, task["task_name"])
+        context = context_agent(query=OBJECTIVE, top_results_num=5)
+        result = openaiwrapper.execution_agent(OBJECTIVE, task["task_name"], context)
         log("\033[93m\033[1m" + "\n*****TASK RESULT*****\n" + "\033[0m\033[0m")
         log(result)
 
@@ -368,7 +193,7 @@ while True:
             "data": result
         }  # This is where you should enrich the result if needed
         result_id = f"result_{task['task_id']}"
-        vector = get_ada_embedding(
+        vector = openaiwrapper.get_ada_embedding(
             enriched_result["data"]
         )  # get vector of the actual result extracted from the dictionary
         index.upsert(
@@ -377,7 +202,7 @@ while True:
         )
 
         # Step 3: Create new tasks and reprioritize task list
-        new_tasks = task_creation_agent(
+        new_tasks = openaiwrapper.task_creation_agent(
             OBJECTIVE,
             enriched_result,
             task["task_name"],
@@ -388,6 +213,6 @@ while True:
             new_task.update({"task_id": tasks_storage.next_task_id()})
             tasks_storage.append(new_task)
 
-        if not JOIN_EXISTING_OBJECTIVE: prioritization_agent()
+        if not JOIN_EXISTING_OBJECTIVE: tasks_storage.replace(openaiwrapper.prioritization_agent(tasks_storage.get_task_names(), tasks_storage.next_task_id()))
 
     time.sleep(5)  # Sleep before checking the task list again
