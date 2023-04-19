@@ -7,7 +7,7 @@ class SlackWrapper:
         self.bot_token = bot_token
         self.app_token = app_token
 
-    def send_slack_message(channel: str, message: str):
+    def send_slack_message(self, channel: str, message: str):
         try:
             slack_client = WebClient(token=self.bot_token)
             slack_client.chat_postMessage(channel=channel, text=message)

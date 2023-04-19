@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+
+# Load default environment variables (.env)
+from dotenv import load_dotenv
+load_dotenv()
+
 import os
 import re
 import time
@@ -6,13 +11,11 @@ from typing import Dict, List
 import importlib
 
 import pinecone
-from dotenv import load_dotenv
 from Logger import log
 from SingleTaskListStorage import SingleTaskListStorage
 from OpenAIWrapper import OpenAIWrapper
 
-# Load default environment variables (.env)
-load_dotenv()
+
 
 # Engine configuration
 

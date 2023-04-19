@@ -12,5 +12,4 @@ def log(message: str):
     print(message)
     with open('somefile.txt', 'a') as the_file:
         the_file.write(cleanMessage+'\n')
-    if(SLACK_BOT_TOKEN):
-        slackwrapper.send_slack_message('taskerator-gpt', cleanMessage)
+    slackwrapper.send_slack_message('taskerator-gpt', cleanMessage)
