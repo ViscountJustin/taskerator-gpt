@@ -1,9 +1,6 @@
-import os
+from Environment import SLACK_APP_TOKEN, SLACK_BOT_TOKEN
 from SlackWrapper import SlackWrapper
 import re
-
-SLACK_APP_TOKEN = os.getenv("SLACK_APP_TOKEN", "")
-SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")
 
 slackwrapper = SlackWrapper(SLACK_BOT_TOKEN, SLACK_APP_TOKEN)
 
